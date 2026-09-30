@@ -174,10 +174,24 @@ function Set-InstallerStateActive {
 function Invoke-ServiceController {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
 
-    $sc = Join-Path $env:SystemRoot "System32\sc.exe"
-    $output = & $sc @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "sc.exe $($Arguments -join ' ') failed ($LASTEXITCODE): $output"
+    # Build the command line explicitly: Windows PowerShell 5.1 does not
+    # preserve embedded quotes (such as a quoted service ImagePath) when
+    # passing arguments to native commands.
+    $quoted = @($Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+    })
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = Join-Path $env:SystemRoot "System32\sc.exe"
+    $startInfo.Arguments = $quoted -join " "
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    $output = $process.StandardOutput.ReadToEnd() + $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) {
+        throw "sc.exe $($startInfo.Arguments) failed ($($process.ExitCode)): $output"
     }
 }
 
