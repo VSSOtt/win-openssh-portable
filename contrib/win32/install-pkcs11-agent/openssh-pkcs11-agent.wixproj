@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.0</ProductVersion>
+    <PayloadPlatform Condition="'$(Platform)' == 'x86'">Win32</PayloadPlatform>
+    <PayloadPlatform Condition="'$(Platform)' != 'x86'">$(Platform)</PayloadPlatform>
+    <ComponentWin64 Condition="'$(Platform)' == 'x64'">yes</ComponentWin64>
+    <ComponentWin64 Condition="'$(Platform)' == 'x86'">no</ComponentWin64>
+    <OutputName>OpenSSH-PKCS11-Agent-$(Platform)-$(ProductVersion)</OutputName>
+    <OutputType>package</OutputType>
+    <OutputPath>bin\$(Platform)\$(Configuration)\$(ProductVersion)\</OutputPath>
+    <IntermediateOutputPath>obj\$(Platform)\$(Configuration)\$(ProductVersion)\</IntermediateOutputPath>
+    <DefineConstants>
+      $(DefineConstants);
+      ProductVersion=$(ProductVersion);
+      ComponentWin64=$(ComponentWin64);
+      PayloadRoot=$(MSBuildThisFileDirectory)..\..\..\bin\$(PayloadPlatform)\$(Configuration);
+      SourceRoot=$(MSBuildThisFileDirectory)..\..\..;
+      InstallerRoot=$(MSBuildThisFileDirectory)
+    </DefineConstants>
+    <DefineSolutionProperties>false</DefineSolutionProperties>
+    <WixTargetsPath>$(WixToolPath)Wix.targets</WixTargetsPath>
+    <WixTasksPath>$(WixToolPath)wixtasks.dll</WixTasksPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="product.wxs" />
+    <Compile Include="payload.wxs" />
+    <Compile Include="custom-actions.wxs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <WixExtension Include="WixUtilExtension" />
+  </ItemGroup>
+
+  <Import Project="$(WixTargetsPath)" />
+</Project>

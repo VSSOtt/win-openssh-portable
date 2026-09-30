@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <CustomAction Id="SetRollbackConfigureAgentService"
+        Property="RollbackConfigureAgentService"
+        Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Manage-OpenSSHPkcs11AgentService.ps1&quot; -Action RollbackInstall -InstallFolder &quot;[INSTALLFOLDER].&quot;" />
+    <CustomAction Id="RollbackConfigureAgentService" BinaryKey="WixCA"
+        DllEntry="WixQuietExec" Execute="rollback" Return="check" Impersonate="no" />
+    <CustomAction Id="SetConfigureAgentService"
+        Property="ConfigureAgentService"
+        Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Manage-OpenSSHPkcs11AgentService.ps1&quot; -Action Install -InstallFolder &quot;[INSTALLFOLDER].&quot;" />
+    <CustomAction Id="ConfigureAgentService" BinaryKey="WixCA"
+        DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="FailAfterAgentServiceForTest" BinaryKey="WixCA"
+        DllEntry="WixFailWhenDeferred" Execute="deferred" Return="check"
+        Impersonate="no" />
+
+    <CustomAction Id="SetRollbackRestoreAgentService"
+        Property="RollbackRestoreAgentService"
+        Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Manage-OpenSSHPkcs11AgentService.ps1&quot; -Action RollbackUninstall -InstallFolder &quot;[INSTALLFOLDER].&quot;" />
+    <CustomAction Id="RollbackRestoreAgentService" BinaryKey="WixCA"
+        DllEntry="WixQuietExec" Execute="rollback" Return="check" Impersonate="no" />
+    <CustomAction Id="SetRestoreAgentService"
+        Property="RestoreAgentService"
+        Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Manage-OpenSSHPkcs11AgentService.ps1&quot; -Action Uninstall -InstallFolder &quot;[INSTALLFOLDER].&quot;" />
+    <CustomAction Id="RestoreAgentService" BinaryKey="WixCA"
+        DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SetRollbackConfigureAgentService" After="RemoveExistingProducts">
+        <![CDATA[NOT REMOVE~="ALL"]]>
+      </Custom>
+      <Custom Action="RollbackConfigureAgentService" After="SetRollbackConfigureAgentService">
+        <![CDATA[NOT REMOVE~="ALL"]]>
+      </Custom>
+      <Custom Action="SetConfigureAgentService" After="RollbackConfigureAgentService">
+        <![CDATA[NOT REMOVE~="ALL"]]>
+      </Custom>
+      <Custom Action="ConfigureAgentService" After="SetConfigureAgentService">
+        <![CDATA[NOT REMOVE~="ALL"]]>
+      </Custom>
+      <Custom Action="FailAfterAgentServiceForTest" After="ConfigureAgentService">
+        <![CDATA[TEST_FAIL_AFTER_SERVICE_CONFIG = "1"]]>
+      </Custom>
+
+      <Custom Action="SetRollbackRestoreAgentService" Before="RollbackRestoreAgentService">
+        <![CDATA[REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE]]>
+      </Custom>
+      <Custom Action="RollbackRestoreAgentService" Before="SetRestoreAgentService">
+        <![CDATA[REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE]]>
+      </Custom>
+      <Custom Action="SetRestoreAgentService" Before="RestoreAgentService">
+        <![CDATA[REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE]]>
+      </Custom>
+      <Custom Action="RestoreAgentService" Before="RemoveFiles">
+        <![CDATA[REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE]]>
+      </Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

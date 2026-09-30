@@ -1,0 +1,67 @@
+<?xml version="1.0"?>
+
+<?ifndef ProductVersion?>
+<?error ProductVersion must be defined?>
+<?endif?>
+
+<?if $(var.Platform) = "x64"?>
+<?define ProgramFilesFolder = "ProgramFiles64Folder"?>
+<?define UpgradeCode = "38D44898-A45A-4C86-8D45-5C85FB72BD1A"?>
+<?define OtherUpgradeCode = "33C0DF18-A201-461E-8BBF-196178BC4CB8"?>
+<?elseif $(var.Platform) = "x86"?>
+<?define ProgramFilesFolder = "ProgramFilesFolder"?>
+<?define UpgradeCode = "33C0DF18-A201-461E-8BBF-196178BC4CB8"?>
+<?define OtherUpgradeCode = "38D44898-A45A-4C86-8D45-5C85FB72BD1A"?>
+<?else?>
+<?error Platform $(var.Platform) is not supported?>
+<?endif?>
+
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+      Name="OpenSSH PKCS#11 Agent Preview"
+      Version="$(var.ProductVersion)"
+      Language="1033"
+      Manufacturer="OpenSSH Contributors"
+      UpgradeCode="$(var.UpgradeCode)">
+    <Package Compressed="yes"
+        InstallerVersion="200"
+        InstallScope="perMachine"
+        Platform="$(var.Platform)" />
+    <MediaTemplate EmbedCab="yes" />
+    <Property Id="MSIDISABLERMRESTART" Value="1" />
+
+    <MajorUpgrade Schedule="afterInstallExecute"
+        DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <Upgrade Id="$(var.OtherUpgradeCode)">
+      <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" OnlyDetect="yes"
+          Property="OTHERARCHITECTUREDETECTED" />
+    </Upgrade>
+    <Condition Message="OpenSSH PKCS#11 Agent Preview requires Windows 7 or newer.">
+      <![CDATA[VersionNT >= 601]]>
+    </Condition>
+    <Condition Message="Remove the other architecture of OpenSSH PKCS#11 Agent Preview before installing this package.">
+      <![CDATA[Installed OR NOT OTHERARCHITECTUREDETECTED]]>
+    </Condition>
+
+    <Feature Id="AgentPreview" Title="OpenSSH PKCS#11 Agent Preview" Level="1"
+        AllowAdvertise="no">
+      <ComponentGroupRef Id="AgentPreviewPayload" />
+    </Feature>
+
+    <CustomActionRef Id="SetRollbackConfigureAgentService" />
+    <CustomActionRef Id="RollbackConfigureAgentService" />
+    <CustomActionRef Id="SetConfigureAgentService" />
+    <CustomActionRef Id="ConfigureAgentService" />
+    <CustomActionRef Id="FailAfterAgentServiceForTest" />
+    <CustomActionRef Id="SetRollbackRestoreAgentService" />
+    <CustomActionRef Id="RollbackRestoreAgentService" />
+    <CustomActionRef Id="SetRestoreAgentService" />
+    <CustomActionRef Id="RestoreAgentService" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="$(var.ProgramFilesFolder)">
+        <Directory Id="INSTALLFOLDER" Name="OpenSSH PKCS11 Agent" />
+      </Directory>
+    </Directory>
+  </Product>
+</Wix>
