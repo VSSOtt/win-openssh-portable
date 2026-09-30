@@ -193,7 +193,10 @@ try
 			$OriginalAgentEnvironmentPresent = $true
 			$OriginalAgentEnvironment = @($agentEnvironmentProperty.Environment)
 		}
+		# Skip empty entries: an empty string would terminate the REG_MULTI_SZ
+		# list before the SOFTHSM2_CONF entry.
 		$agentEnvironment = @($OriginalAgentEnvironment | Where-Object {
+			-not [string]::IsNullOrEmpty([string]$_) -and
 			-not ([string]$_).StartsWith('SOFTHSM2_CONF=',
 				[StringComparison]::OrdinalIgnoreCase)
 		})
