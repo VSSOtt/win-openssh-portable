@@ -719,7 +719,10 @@ process_add_smartcard_key(struct sshbuf *request, struct sshbuf *response,
 		if (r != SSH_ERR_FEATURE_UNSUPPORTED) {
 			error("add smartcard constraints are invalid");
 			request_invalid = 1;
-		}
+		} else
+			logit("refusing PKCS#11 add of \"%.100s\": lifetime, "
+			    "confirmation and destination constraints are not "
+			    "supported", provider);
 		goto done;
 	}
 
