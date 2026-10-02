@@ -40,3 +40,19 @@ Set OPENSSH_TEST_PKCS11_AGENT_INSTALLER_MSI to the built MSI path and run
 regress\pesterTests\Pkcs11AgentInstaller.Integration.Tests.ps1 from an elevated
 PowerShell session. Set OPENSSH_TEST_PKCS11_AGENT_INSTALLER_REQUIRED=1 in CI so
 missing prerequisites fail instead of producing an explicit local skip.
+
+Agent logging
+-------------
+
+To get a log file, append -v, -vv, -vvv or -vvvv (verbose, debug1, debug2,
+debug3) to the service's ImagePath, for example:
+
+  sc.exe config ssh-agent binPath= "\"C:\Program Files\OpenSSH PKCS11 Agent\ssh-agent.exe\" -vv"
+
+and restart the service. The log is then written to
+%ProgramData%\ssh\logs\ssh-agent.log (created on demand, readable only by
+SYSTEM and Administrators). The PIN is never logged.
+
+For interactive debugging, an elevated "ssh-agent.exe -ddd -D" runs in the
+foreground, logs to the console and keeps serving connections until Ctrl+C
+(without -D it exits after the first connection).

@@ -596,6 +596,9 @@ keyagent_pkcs11_reload_providers(struct agent_connection *con)
 				pin[pin_len] = '\0';
 				count = pkcs11_add_provider(provider, pin, &keys, NULL);
 				if (count <= 0) {
+					logit("failed to reload stored PKCS#11 provider "
+					    "\"%.100s\" for signing: no keys loaded",
+					    provider);
 					free_pkcs11_sign_provider(&provider, &pin, pin_len,
 					    &epin, epin_alloc_len, &keys, count);
 					continue;
@@ -695,6 +698,7 @@ process_add_smartcard_key(struct sshbuf *request, struct sshbuf *response,
 	const char *comment;
 	int i, j, count = 0, r = 0, request_invalid = 0, success = 0;
 	int cert_only = 0, identities_stored = 0;
+	int keys_stored = 0, certs_stored = 0;
 	struct sshkey **keys = NULL, **certs = NULL, *cert = NULL;
 	struct pkcs11_identity_change **identity_changes = NULL;
 	size_t k, pin_len = 0, ncerts = 0, nidentity_changes = 0;
@@ -720,7 +724,7 @@ process_add_smartcard_key(struct sshbuf *request, struct sshbuf *response,
 	}
 
 	if (con->nsession_ids != 0 && !remote_add_provider) {
-		verbose("failed PKCS#11 add of \"%.100s\": remote addition of "
+		logit("refusing PKCS#11 add of \"%.100s\": remote addition of "
 		    "providers is disabled", provider);
 		goto done;
 	}
@@ -740,14 +744,17 @@ process_add_smartcard_key(struct sshbuf *request, struct sshbuf *response,
 	verbose("provider realpath: \"%.100s\"", canonical_provider);
 	verbose("allowed provider paths: \"%.100s\"", allowed_providers);
 	if (match_pattern_list(allowed_provider, allowed_providers, 1) != 1) {
-		verbose("refusing PKCS#11 add of \"%.100s\": "
-		    "provider not allowed", canonical_provider);
+		logit("refusing PKCS#11 add of \"%.100s\": provider not "
+		    "allowed by -P \"%.200s\"", canonical_provider,
+		    allowed_providers);
 		goto done;
 	}
 
 	count = pkcs11_add_provider(canonical_provider, pin, &keys, &labels);
 	if (count <= 0) {
 		error_f("failed to load provider keys: count:%d", count);
+		logit("failed PKCS#11 add of \"%.100s\": no keys loaded from "
+		    "the provider", canonical_provider);
 		goto done;
 	}
 
@@ -769,6 +776,7 @@ process_add_smartcard_key(struct sshbuf *request, struct sshbuf *response,
 			sshkey_free(cert);
 			cert = NULL;
 			identities_stored++;
+			certs_stored++;
 		}
 		if (cert_only)
 			continue;
@@ -777,12 +785,20 @@ process_add_smartcard_key(struct sshbuf *request, struct sshbuf *response,
 		    &nidentity_changes) != 0)
 			goto done;
 		identities_stored++;
+		keys_stored++;
 	}
 
-	if (identities_stored == 0 || store_pkcs11_provider(user_root, con,
-	    canonical_provider, pin, pin_len) != 0)
+	if (identities_stored == 0) {
+		logit("failed PKCS#11 add of \"%.100s\": no matching identities "
+		    "to store", canonical_provider);
 		goto done;
-	debug("added PKCS11 provider and identities to store");
+	}
+	if (store_pkcs11_provider(user_root, con, canonical_provider, pin,
+	    pin_len) != 0)
+		goto done;
+	logit("added PKCS#11 provider \"%.100s\": %d key(s) and %d certificate(s) "
+	    "stored%s", canonical_provider, keys_stored, certs_stored,
+	    cert_only ? " (certificate-only)" : "");
 	success = 1;
 done:
 	r = 0;
@@ -791,6 +807,8 @@ done:
 	else if (sshbuf_put_u8(response, success ? SSH_AGENT_SUCCESS : SSH_AGENT_FAILURE) != 0)
 		r = -1;
 
+	if (!success && !request_invalid)
+		logit("PKCS#11 add of \"%.100s\" failed", provider ? provider : "");
 	if (!success && user_root != NULL)
 		rollback_pkcs11_identities(user_root, identity_changes,
 		    nidentity_changes);
@@ -836,16 +854,24 @@ int process_remove_smartcard_key(struct sshbuf* request, struct sshbuf* response
 		goto done;
 	}
 
-	if (get_user_root(con, &user_root) != 0 ||
-		!is_reg_sub_key_exists(user_root, SSH_PKCS11_PROVIDERS_ROOT, canonical_provider))
+	if (get_user_root(con, &user_root) != 0)
 		goto done;
+	if (!is_reg_sub_key_exists(user_root, SSH_PKCS11_PROVIDERS_ROOT, canonical_provider)) {
+		logit("failed PKCS#11 remove of \"%.100s\": provider is not "
+		    "registered", canonical_provider);
+		goto done;
+	}
 
 	if (remove_pkcs11_identities(user_root, canonical_provider) != 0 ||
 	    remove_matching_subkeys_from_registry(user_root,
 	    SSH_PKCS11_PROVIDERS_ROOT, L"provider", canonical_provider) != 0) {
+		logit("failed PKCS#11 remove of \"%.100s\": could not delete "
+		    "the stored identities", canonical_provider);
 		goto done;
 	}
 
+	logit("removed PKCS#11 provider \"%.100s\" and its identities",
+	    canonical_provider);
 	success = 1;
 done:
 	r = 0;

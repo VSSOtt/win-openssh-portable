@@ -34,6 +34,7 @@
 #include "..\misc_internal.h"
 #include "..\Debug.h"
 #include <wchar.h>
+#include <sddl.h>
 
 #pragma warning(push, 3)
 
@@ -42,7 +43,69 @@ char* allowed_providers = NULL;
 
 int remote_add_provider;
 
+/*
+ * -v/-vv/-vvv/-vvvv: log level VERBOSE/DEBUG1/DEBUG2/DEBUG3 (0 = default,
+ * INFO) written to %ProgramData%\ssh\logs\ssh-agent.log (LOCAL0 facility).
+ * Passed on to the per-connection worker processes.
+ */
+int agent_verbosity;
+
+/* -D: with -d/-dd/-ddd keep serving connections instead of exiting after one */
+int agent_keep_running;
+
 int scm_start_service(DWORD, LPWSTR*);
+
+/*
+ * Make sure %ProgramData%\ssh\logs exists. Directories that are created here
+ * are only accessible to SYSTEM and Administrators, like the logs of sshd.
+ * Returns 1 if the directory exists afterwards.
+ */
+static int
+ensure_logs_dir(void)
+{
+	wchar_t ssh_dir[PATH_MAX] = { 0 }, logs_dir[PATH_MAX] = { 0 };
+	SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, FALSE };
+	int ok = 0;
+
+	if (swprintf_s(ssh_dir, PATH_MAX, L"%s\\ssh", __wprogdata) <= 0 ||
+	    swprintf_s(logs_dir, PATH_MAX, L"%s\\logs", ssh_dir) <= 0)
+		return 0;
+	if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+	    L"D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", SDDL_REVISION_1,
+	    &sa.lpSecurityDescriptor, NULL))
+		return 0;
+	if ((CreateDirectoryW(ssh_dir, &sa) || GetLastError() == ERROR_ALREADY_EXISTS) &&
+	    (CreateDirectoryW(logs_dir, &sa) || GetLastError() == ERROR_ALREADY_EXISTS))
+		ok = 1;
+	LocalFree(sa.lpSecurityDescriptor);
+	return ok;
+}
+
+/*
+ * Initialize logging for the service and its workers. Without -v this is the
+ * event log at INFO level. With -v the log level is raised and output goes to
+ * %ProgramData%\ssh\logs\ssh-agent.log (the directory is created if needed);
+ * if that is not possible the event log is used.
+ */
+static void
+agent_log_init(void)
+{
+	SyslogFacility facility = SYSLOG_FACILITY_USER;
+	LogLevel level = SYSLOG_LEVEL_INFO;
+	int logs_dir_missing = 0;
+
+	if (agent_verbosity > 0) {
+		level = (LogLevel)(SYSLOG_LEVEL_INFO + agent_verbosity);
+		if (ensure_logs_dir())
+			facility = SYSLOG_FACILITY_LOCAL0;
+		else
+			logs_dir_missing = 1;
+	}
+	log_init("ssh-agent", level, facility, 0);
+	if (logs_dir_missing)
+		error("cannot create directory %%ProgramData%%\\ssh\\logs, "
+		    "logging to the event log instead of ssh-agent.log");
+}
 
 SERVICE_TABLE_ENTRYW dispatch_table[] =
 {
@@ -149,6 +212,21 @@ wmain(int argc, wchar_t **wargv)
 					fatal("Missing argument for -P option");
 				}
 			}
+			else if (wcsncmp(wargv[i], L"-v", 2) == 0) {
+				int n = 0;
+				const wchar_t *p = wargv[i] + 1;
+
+				while (*p == L'v') {
+					n++;
+					p++;
+				}
+				if (*p != L'\0')
+					fatal("Invalid option %ls", wargv[i]);
+				agent_verbosity = n > 4 ? 4 : n;
+			}
+			else if (wcscmp(wargv[i], L"-D") == 0) {
+				agent_keep_running = 1;
+			}
 		}
 	}
 
@@ -191,7 +269,7 @@ wmain(int argc, wchar_t **wargv)
 					char* h = 0;
 					h += _wtoi(*(wargv + i));
 					if (h != 0) {
-						log_init("ssh-agent", 3, 1, 0);
+						agent_log_init();
 						agent_process_connection(h);
 						return 0;
 					}
@@ -230,7 +308,9 @@ scm_start_service(DWORD num, LPWSTR* args)
 	service_status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
 	ReportSvcStatus(SERVICE_START_PENDING, NO_ERROR, 300);
 	ReportSvcStatus(SERVICE_RUNNING, NO_ERROR, 0);
-	log_init("ssh-agent", 3, 1, 0);
+	agent_log_init();
+	logit("ssh-agent service started: log verbosity %d, allowed providers \"%.200s\"",
+	    agent_verbosity, allowed_providers ? allowed_providers : "");
 	agent_start(FALSE);
 	return 0;
 }

@@ -40,6 +40,8 @@
 
 extern char* allowed_providers;
 extern int remote_add_provider;
+extern int agent_verbosity;
+extern int agent_keep_running;
 
 char* sshagent_con_username;
 HANDLE sshagent_client_primary_token;
@@ -160,11 +162,15 @@ agent_listen_loop()
 			verbose("client pid %d connected", client_pid);
 			if (debug_mode) {
 				agent_process_connection(con);
-				agent_cleanup();
-				return;
+				/* -D keeps the debug agent serving further connections */
+				if (!agent_keep_running) {
+					agent_cleanup();
+					return;
+				}
 			} else {
 				/* spawn a child to take care of this*/
 				wchar_t path[PATH_MAX], module_path[PATH_MAX];
+				wchar_t verbosity_flag[8] = L"";
 				PROCESS_INFORMATION pi;
 				STARTUPINFOW si;
 
@@ -172,12 +178,17 @@ agent_listen_loop()
 				memset(&si, 0, sizeof(STARTUPINFOW));
 				GetModuleFileNameW(NULL, module_path, PATH_MAX);
 				SetHandleInformation(con, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+				/* hand the service's -v/-vv/-vvv/-vvvv on to the worker */
+				if (agent_verbosity > 0) {
+					wcscpy_s(verbosity_flag, _countof(verbosity_flag), L"-vvvv");
+					verbosity_flag[agent_verbosity + 1] = L'\0';
+				}
 				if (remote_add_provider == 1) {
-					if (swprintf_s(path, PATH_MAX, L"%s %d %s -P \"%S\"", module_path, (int)(intptr_t)con, L"-Oallow-remote-pkcs11", allowed_providers) == -1)
+					if (swprintf_s(path, PATH_MAX, L"%s %d %s -P \"%S\" %s", module_path, (int)(intptr_t)con, L"-Oallow-remote-pkcs11", allowed_providers, verbosity_flag) == -1)
 						verbose("Failed to create child process %ls ERROR:%d", module_path, GetLastError());
 				}
 				else {
-					if (swprintf_s(path, PATH_MAX, L"%s %d -P \"%S\"", module_path, (int)(intptr_t)con, allowed_providers) == -1)
+					if (swprintf_s(path, PATH_MAX, L"%s %d -P \"%S\" %s", module_path, (int)(intptr_t)con, allowed_providers, verbosity_flag) == -1)
 						verbose("Failed to create child process %ls ERROR:%d", module_path, GetLastError());
 				}
 				if (CreateProcessW(NULL, path, NULL, NULL, TRUE, DETACHED_PROCESS, NULL, NULL, &si, &pi) == FALSE) {
