@@ -300,14 +300,43 @@ function Set-AgentMitigation {
     }
 }
 
+function Get-ImageCommandLine {
+    # Splits a service ImagePath into the executable and its arguments. The
+    # executable is either quoted or an unquoted path ending in .exe.
+    param([string]$ImagePath)
+
+    $text = $ImagePath.Trim()
+    if ($text -match '^"([^"]*)"\s*(.*)$') {
+        return [pscustomobject]@{
+            Executable = $Matches[1]
+            Arguments = $Matches[2].Trim()
+        }
+    }
+    if ($text -match '^(.+?\.exe)(?:\s+(.*))?$') {
+        $arguments = ""
+        if ($Matches.ContainsKey(2)) {
+            $arguments = $Matches[2].Trim()
+        }
+        return [pscustomobject]@{
+            Executable = $Matches[1]
+            Arguments = $arguments
+        }
+    }
+    [pscustomobject]@{ Executable = $text; Arguments = "" }
+}
+
 function Test-SameImagePath {
+    # Compares the executables only: extra service arguments such as -vv do not
+    # make the service a different one.
     param([string]$Left, [string]$Right)
     if ([string]::IsNullOrWhiteSpace($Left) -or
         [string]::IsNullOrWhiteSpace($Right)) {
         return $false
     }
-    $leftValue = [Environment]::ExpandEnvironmentVariables($Left.Trim().Trim('"'))
-    $rightValue = [Environment]::ExpandEnvironmentVariables($Right.Trim().Trim('"'))
+    $leftValue = [Environment]::ExpandEnvironmentVariables(
+        (Get-ImageCommandLine $Left).Executable)
+    $rightValue = [Environment]::ExpandEnvironmentVariables(
+        (Get-ImageCommandLine $Right).Executable)
     return $leftValue.Equals($rightValue,
         [StringComparison]::OrdinalIgnoreCase)
 }
@@ -329,6 +358,16 @@ function Enable-Pkcs11AgentPreview {
     }
     $previewImage = '"' + $agentPath + '"'
     $serviceState = Get-AgentServiceState -ServiceName $ServiceName
+    # An upgrade keeps arguments (for example -vv) that were added to the
+    # preview service's ImagePath.
+    $targetImage = $previewImage
+    if ($serviceState.Exists -and
+        (Test-SameImagePath $serviceState.ImagePath $previewImage)) {
+        $keptArguments = (Get-ImageCommandLine $serviceState.ImagePath).Arguments
+        if (-not [string]::IsNullOrWhiteSpace($keptArguments)) {
+            $targetImage = "$previewImage $keptArguments"
+        }
+    }
     $installerState = Get-InstallerState
     $active = $null -ne $installerState -and
         [int]$installerState.Active -eq 1
@@ -350,7 +389,7 @@ function Enable-Pkcs11AgentPreview {
         if ($serviceState.Exists) {
             Stop-AgentService -ServiceName $ServiceName
             Set-ServiceImageAndStart -ServiceName $ServiceName `
-                -ImagePath $previewImage -Start 2
+                -ImagePath $targetImage -Start 2
         } else {
             Invoke-ServiceController @("create", $ServiceName, "binPath=",
                 $previewImage, "start=", "auto", "type=", "own", "obj=",

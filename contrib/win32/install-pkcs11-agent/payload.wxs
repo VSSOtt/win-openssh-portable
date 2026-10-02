@@ -5,6 +5,12 @@
       <Component Guid="*" Win64="$(var.ComponentWin64)">
         <File Id="PreviewSshAgent" Source="$(var.PayloadRoot)\ssh-agent.exe"
             Name="ssh-agent.exe" KeyPath="yes" />
+        <!-- Release the running agent before its files are removed, also when
+             an upgrade removes the previous version. Installation does not
+             stop the service here: the service custom action records its
+             original state first. -->
+        <ServiceControl Id="StopAgentOnRemove" Name="ssh-agent"
+            Stop="uninstall" Wait="yes" />
       </Component>
       <Component Guid="*" Win64="$(var.ComponentWin64)">
         <File Source="$(var.PayloadRoot)\ssh-pkcs11-helper.exe"

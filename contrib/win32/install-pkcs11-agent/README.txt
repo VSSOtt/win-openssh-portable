@@ -49,7 +49,9 @@ debug3) to the service's ImagePath, for example:
 
   sc.exe config ssh-agent binPath= "\"C:\Program Files\OpenSSH PKCS11 Agent\ssh-agent.exe\" -vv"
 
-and restart the service. The log is then written to
+and restart the service. The installer still recognizes the service with such
+arguments, keeps them across upgrades and removes or restores the service on
+uninstall. The log is then written to
 %ProgramData%\ssh\logs\ssh-agent.log (created on demand, readable only by
 SYSTEM and Administrators). The PIN is never logged.
 

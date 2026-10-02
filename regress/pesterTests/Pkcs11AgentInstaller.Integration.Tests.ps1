@@ -58,6 +58,29 @@ function Invoke-MsiExecChecked {
     return $process.ExitCode
 }
 
+function Get-MsiPayloadHash {
+    # SHA-256 of ssh-agent.exe inside an MSI (administrative extraction, no
+    # installation).
+    param([string]$Msi, [string]$FileName = "ssh-agent.exe")
+    $target = Join-Path $env:TEMP ("pkcs11-agent-payload-" + [guid]::NewGuid())
+    try {
+        $process = Start-Process msiexec.exe -ArgumentList @("/a", "`"$Msi`"",
+            "/qn", "TARGETDIR=`"$target`"") -Wait -PassThru -WindowStyle Hidden
+        if ($process.ExitCode -ne 0) {
+            throw "Extracting $Msi failed with exit code $($process.ExitCode)"
+        }
+        $file = Get-ChildItem $target -Recurse -Filter $FileName |
+            Select-Object -First 1
+        return [string](Get-FileHash -LiteralPath $file.FullName `
+            -Algorithm SHA256).Hash
+    } finally {
+        if (Test-Path -LiteralPath $target) {
+            Remove-Item -LiteralPath $target -Recurse -Force `
+                -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Describe "PKCS11 agent preview MSI lifecycle" -Tags "InstallerIntegration" {
     It "rolls the service change back when installation fails" -Skip:$skipIntegration {
         $before = Get-SshAgentSnapshot
@@ -149,6 +172,16 @@ Describe "PKCS11 agent preview MSI lifecycle" -Tags "InstallerIntegration" {
             $during.Start | Should Be 2
             $during.Running | Should Be $true
             $during.ImagePath | Should Match "OpenSSH PKCS11 Agent.*ssh-agent.exe"
+            # The binaries keep their Windows file version across builds; the
+            # upgrade must still replace them.
+            $installedAgent = Join-Path $env:ProgramFiles `
+                "OpenSSH PKCS11 Agent\ssh-agent.exe"
+            if (-not (Test-Path -LiteralPath $installedAgent)) {
+                $installedAgent = Join-Path ${env:ProgramFiles(x86)} `
+                    "OpenSSH PKCS11 Agent\ssh-agent.exe"
+            }
+            (Get-FileHash -LiteralPath $installedAgent -Algorithm SHA256).Hash |
+                Should Be (Get-MsiPayloadHash $upgradeMsiPath)
         } finally {
             if ($upgraded) {
                 Invoke-MsiExecChecked -Arguments @("/x", $upgradeMsiPath,
@@ -158,6 +191,65 @@ Describe "PKCS11 agent preview MSI lifecycle" -Tags "InstallerIntegration" {
                     "/qn", "/norestart") -ExpectedExitCodes @(0, 1605, 3010)
             }
         }
+        $after = Get-SshAgentSnapshot
+        $after.Exists | Should Be $before.Exists
+        if ($before.Exists) {
+            $after.ImagePath | Should Be $before.ImagePath
+            $after.Start | Should Be $before.Start
+            $after.Running | Should Be $before.Running
+        }
+    }
+
+    It "keeps added service arguments across a major upgrade" -Skip:$skipUpgrade {
+        $before = Get-SshAgentSnapshot
+        $keyPath = "HKLM:\SYSTEM\CurrentControlSet\Services\ssh-agent"
+        $upgraded = $false
+        try {
+            Invoke-MsiExecChecked -Arguments @("/i", $msiPath, "/qn", "/norestart")
+            Stop-Service ssh-agent -Force
+            $image = [string](Get-ItemProperty -LiteralPath $keyPath).ImagePath
+            Set-ItemProperty -LiteralPath $keyPath -Name ImagePath `
+                -Value ($image + " -vv")
+            Invoke-MsiExecChecked -Arguments @("/i", $upgradeMsiPath, "/qn",
+                "/norestart")
+            $upgraded = $true
+            $during = Get-SshAgentSnapshot
+            $during.ImagePath | Should Match "OpenSSH PKCS11 Agent.*ssh-agent.exe.* -vv$"
+            $during.Running | Should Be $true
+        } finally {
+            Invoke-MsiExecChecked -Arguments @("/x",
+                $(if ($upgraded) { $upgradeMsiPath } else { $msiPath }),
+                "/qn", "/norestart") -ExpectedExitCodes @(0, 1605, 3010)
+        }
+        $after = Get-SshAgentSnapshot
+        $after.Exists | Should Be $before.Exists
+        if ($before.Exists) {
+            $after.ImagePath | Should Be $before.ImagePath
+            $after.Start | Should Be $before.Start
+            $after.Running | Should Be $before.Running
+        }
+    }
+
+    It "still recognizes the preview service when arguments were added" -Skip:$skipIntegration {
+        $before = Get-SshAgentSnapshot
+        $keyPath = "HKLM:\SYSTEM\CurrentControlSet\Services\ssh-agent"
+        $installed = $false
+        try {
+            Invoke-MsiExecChecked -Arguments @("/i", $msiPath, "/qn", "/norestart")
+            $installed = $true
+            Stop-Service ssh-agent -Force
+            $image = [string](Get-ItemProperty -LiteralPath $keyPath).ImagePath
+            Set-ItemProperty -LiteralPath $keyPath -Name ImagePath `
+                -Value ($image + " -vv")
+        } finally {
+            if ($installed) {
+                Invoke-MsiExecChecked -Arguments @("/x", $msiPath, "/qn",
+                    "/norestart", "/l*v",
+                    (Join-Path $env:TEMP "pkcs11-agent-installer-args-uninstall.log"))
+            }
+        }
+        # Uninstalling must remove a service that the installer created, or
+        # restore the original one, instead of leaving it with a dangling image.
         $after = Get-SshAgentSnapshot
         $after.Exists | Should Be $before.Exists
         if ($before.Exists) {

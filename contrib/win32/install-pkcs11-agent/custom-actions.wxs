@@ -27,7 +27,9 @@
         DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
 
     <InstallExecuteSequence>
-      <Custom Action="SetRollbackConfigureAgentService" After="RemoveExistingProducts">
+      <!-- Scheduled after InstallFiles, so that the service script exists and the
+           previous version has already been removed during an upgrade. -->
+      <Custom Action="SetRollbackConfigureAgentService" After="InstallFiles">
         <![CDATA[NOT REMOVE~="ALL"]]>
       </Custom>
       <Custom Action="RollbackConfigureAgentService" After="SetRollbackConfigureAgentService">

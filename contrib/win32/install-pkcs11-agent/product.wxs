@@ -30,7 +30,11 @@
     <MediaTemplate EmbedCab="yes" />
     <Property Id="MSIDISABLERMRESTART" Value="1" />
 
-    <MajorUpgrade Schedule="afterInstallExecute"
+    <!-- The previous version is removed before the new files are installed:
+         the binaries keep the same Windows file version across builds, so
+         Windows Installer would not overwrite them if the old copies were
+         still present. -->
+    <MajorUpgrade Schedule="afterInstallInitialize"
         DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <Upgrade Id="$(var.OtherUpgradeCode)">
       <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" OnlyDetect="yes"

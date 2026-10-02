@@ -31,7 +31,46 @@ Describe "PKCS11 agent preview installer" -Tags "Unit", "Installer" {
             $product | Should Match 'Property Id="MSIDISABLERMRESTART" Value="1"'
             $actions | Should Match 'Execute="rollback"'
             $actions | Should Match 'WixFailWhenDeferred'
-            $actions | Should Match 'After="RemoveExistingProducts"'
+            $actions | Should Match 'SetRollbackConfigureAgentService" After="InstallFiles"'
+        }
+    }
+
+    Context "Upgrade and service image handling" {
+        BeforeAll {
+            Import-Module $modulePath -Force
+        }
+
+        It "removes the previous version before installing the new files" {
+            $product = Get-Content (Join-Path $installerRoot "product.wxs") -Raw
+            $payload = Get-Content (Join-Path $installerRoot "payload.wxs") -Raw
+            $product | Should Match 'MajorUpgrade Schedule="afterInstallInitialize"'
+            $payload | Should Match 'ServiceControl[^>]*Name="ssh-agent"[^>]*Stop="uninstall"'
+        }
+
+        It "splits quoted and unquoted image paths from their arguments" {
+            InModuleScope OpenSSHPkcs11AgentInstaller {
+                $q = Get-ImageCommandLine '"C:\Program Files\A B\ssh-agent.exe" -vv -P x'
+                $q.Executable | Should Be 'C:\Program Files\A B\ssh-agent.exe'
+                $q.Arguments | Should Be '-vv -P x'
+                $u = Get-ImageCommandLine 'C:\Program Files\A B\ssh-agent.exe -vv'
+                $u.Executable | Should Be 'C:\Program Files\A B\ssh-agent.exe'
+                $u.Arguments | Should Be '-vv'
+                $n = Get-ImageCommandLine '"C:\x\ssh-agent.exe"'
+                $n.Executable | Should Be 'C:\x\ssh-agent.exe'
+                $n.Arguments | Should Be ''
+            }
+        }
+
+        It "treats the service as the preview service despite extra arguments" {
+            InModuleScope OpenSSHPkcs11AgentInstaller {
+                $preview = '"C:\Program Files\OpenSSH PKCS11 Agent\ssh-agent.exe"'
+                Test-SameImagePath ($preview + ' -vv') $preview | Should Be $true
+                Test-SameImagePath 'c:\program files\openssh pkcs11 agent\SSH-AGENT.EXE -vvv' $preview |
+                    Should Be $true
+                Test-SameImagePath '"C:\OpenSSH\ssh-agent.exe" -vv' $preview |
+                    Should Be $false
+                Test-SameImagePath '' $preview | Should Be $false
+            }
         }
     }
 
