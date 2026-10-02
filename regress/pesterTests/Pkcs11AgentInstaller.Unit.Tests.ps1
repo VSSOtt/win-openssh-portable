@@ -61,6 +61,21 @@ Describe "PKCS11 agent preview installer" -Tags "Unit", "Installer" {
             }
         }
 
+        It "adds the privileges needed for the helper without dropping existing ones" {
+            InModuleScope OpenSSHPkcs11AgentInstaller {
+                $required = $script:RequiredPrivileges -split "/"
+                $required -contains "SeAssignPrimaryTokenPrivilege" | Should Be $true
+                $merged = Merge-ServicePrivileges @("SeChangeNotifyPrivilege",
+                    "seassignprimarytokenprivilege") $required
+                ($merged -join ",") |
+                    Should Be ("SeChangeNotifyPrivilege,seassignprimarytokenprivilege," +
+                    "SeTcbPrivilege,SeBackupPrivilege,SeRestorePrivilege,SeImpersonatePrivilege")
+                (Merge-ServicePrivileges @() $required).Count | Should Be 5
+                (Merge-ServicePrivileges $null $required).Count | Should Be 5
+                (Merge-ServicePrivileges @() @()).Count | Should Be 0
+            }
+        }
+
         It "treats the service as the preview service despite extra arguments" {
             InModuleScope OpenSSHPkcs11AgentInstaller {
                 $preview = '"C:\Program Files\OpenSSH PKCS11 Agent\ssh-agent.exe"'

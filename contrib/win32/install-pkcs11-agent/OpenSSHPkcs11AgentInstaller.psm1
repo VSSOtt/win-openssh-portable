@@ -89,6 +89,11 @@ function Get-AgentServiceState {
         if ($delayedPresent) {
             $delayedValue = [int]$key.GetValue("DelayedAutoStart", 0)
         }
+        $privilegesPresent = @($key.GetValueNames()) -contains "RequiredPrivileges"
+        $privileges = @()
+        if ($privilegesPresent) {
+            $privileges = @([string[]]$key.GetValue("RequiredPrivileges"))
+        }
     } finally {
         $key.Dispose()
     }
@@ -100,6 +105,8 @@ function Get-AgentServiceState {
         Start = $start
         DelayedPresent = $delayedPresent
         DelayedValue = $delayedValue
+        PrivilegesPresent = $privilegesPresent
+        Privileges = $privileges
         Running = $null -ne $service -and $service.Status -eq "Running"
     }
 }
@@ -149,12 +156,20 @@ function Save-InstallerState {
             Set-StateValue $key "OriginalRunning" ([int]$ServiceState.Running) DWord
             Set-StateValue $key "OriginalDelayedPresent" ([int]$ServiceState.DelayedPresent) DWord
             Set-StateValue $key "OriginalDelayedValue" $ServiceState.DelayedValue DWord
+            Set-StateValue $key "PrivilegesCaptured" 1 DWord
+            Set-StateValue $key "OriginalPrivilegesPresent" ([int]$ServiceState.PrivilegesPresent) DWord
+            if ($ServiceState.PrivilegesPresent) {
+                Set-StateValue $key "OriginalPrivileges" ([string[]]$ServiceState.Privileges) MultiString
+            } elseif (@($key.GetValueNames()) -contains "OriginalPrivileges") {
+                $key.DeleteValue("OriginalPrivileges")
+            }
         } else {
             Set-StateValue $key "OriginalImagePath" "" String
             Set-StateValue $key "OriginalStart" 0 DWord
             Set-StateValue $key "OriginalRunning" 0 DWord
             Set-StateValue $key "OriginalDelayedPresent" 0 DWord
             Set-StateValue $key "OriginalDelayedValue" 0 DWord
+            Set-StateValue $key "PrivilegesCaptured" 0 DWord
         }
     } finally {
         $key.Dispose()
@@ -285,6 +300,55 @@ function Set-DelayedAutoStart {
     }
 }
 
+function Merge-ServicePrivileges {
+    # Union of the privileges a service already requires and the ones the agent
+    # needs. Existing entries keep their order; comparison ignores case.
+    param([string[]]$Current = @(), [string[]]$Required = @())
+
+    $merged = New-Object System.Collections.Generic.List[string]
+    foreach ($name in @($Current) + @($Required)) {
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            continue
+        }
+        $known = $false
+        foreach ($existing in $merged) {
+            if ($existing.Equals($name, [StringComparison]::OrdinalIgnoreCase)) {
+                $known = $true
+                break
+            }
+        }
+        if (-not $known) {
+            $merged.Add($name)
+        }
+    }
+    return ,@($merged)
+}
+
+function Set-ServiceRequiredPrivileges {
+    # $null removes the RequiredPrivileges value; it takes effect when the
+    # service is started the next time.
+    param(
+        [Parameter(Mandatory = $true)][string]$ServiceName,
+        [string[]]$Privileges
+    )
+
+    $key = Open-LocalMachineKey -Path `
+        "SYSTEM\CurrentControlSet\Services\$ServiceName" -Writable
+    if ($null -eq $key) {
+        throw "Service registry key not found for $ServiceName"
+    }
+    try {
+        if ($null -eq $Privileges) {
+            $key.DeleteValue("RequiredPrivileges", $false)
+        } else {
+            $key.SetValue("RequiredPrivileges", [string[]]$Privileges,
+                [Microsoft.Win32.RegistryValueKind]::MultiString)
+        }
+    } finally {
+        $key.Dispose()
+    }
+}
+
 function Set-AgentMitigation {
     $path = "SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ssh-agent.exe"
     $key = Open-LocalMachineKey -Path $path -Create
@@ -390,6 +454,15 @@ function Enable-Pkcs11AgentPreview {
             Stop-AgentService -ServiceName $ServiceName
             Set-ServiceImageAndStart -ServiceName $ServiceName `
                 -ImagePath $targetImage -Start 2
+            # The agent starts the PKCS#11 helper with the client's token, which
+            # needs these privileges; an existing service may not hold them.
+            $current = @()
+            if ($serviceState.PrivilegesPresent) {
+                $current = $serviceState.Privileges
+            }
+            Set-ServiceRequiredPrivileges -ServiceName $ServiceName `
+                -Privileges (Merge-ServicePrivileges $current `
+                    ($script:RequiredPrivileges -split "/"))
         } else {
             Invoke-ServiceController @("create", $ServiceName, "binPath=",
                 $previewImage, "start=", "auto", "type=", "own", "obj=",
@@ -442,6 +515,18 @@ function Restore-Pkcs11AgentService {
         Set-DelayedAutoStart -ServiceName $ServiceName `
             -Present ([bool][int]$state.OriginalDelayedPresent) `
             -Value ([int]$state.OriginalDelayedValue)
+        # States written by earlier previews did not record the privileges;
+        # those are left as they are.
+        $captured = $null -ne $state.PSObject.Properties["PrivilegesCaptured"] -and
+            [int]$state.PrivilegesCaptured -eq 1
+        if ($captured) {
+            $originalPrivileges = $null
+            if ([int]$state.OriginalPrivilegesPresent -eq 1) {
+                $originalPrivileges = @([string[]]$state.OriginalPrivileges)
+            }
+            Set-ServiceRequiredPrivileges -ServiceName $ServiceName `
+                -Privileges $originalPrivileges
+        }
         if ($plan.StartService) {
             Start-AgentService -ServiceName $ServiceName
         }

@@ -81,6 +81,49 @@ function Get-MsiPayloadHash {
     }
 }
 
+function Get-AgentRequiredPrivileges {
+    $item = Get-ItemProperty -ErrorAction SilentlyContinue `
+        -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\ssh-agent"
+    if ($null -eq $item -or $null -eq $item.PSObject.Properties["RequiredPrivileges"]) {
+        return $null
+    }
+    return ,@([string[]]$item.RequiredPrivileges)
+}
+
+function Invoke-ExistingServicePrivilegeScenario {
+    # Creates a throw-away ssh-agent service, installs and uninstalls the MSI
+    # over it and reports the RequiredPrivileges seen in between and afterwards.
+    param([string[]]$InitialPrivileges, [string]$Msi)
+
+    $sc = Join-Path $env:SystemRoot "System32\sc.exe"
+    $dummy = Join-Path $env:SystemRoot "System32\cmd.exe"
+    & $sc create ssh-agent binPath= $dummy start= demand | Out-Null
+    $LASTEXITCODE | Should Be 0
+    $installed = $false
+    try {
+        if ($InitialPrivileges) {
+            & $sc privs ssh-agent ($InitialPrivileges -join "/") | Out-Null
+            $LASTEXITCODE | Should Be 0
+        }
+        Invoke-MsiExecChecked -Arguments @("/i", $Msi, "/qn", "/norestart")
+        $installed = $true
+        $during = Get-AgentRequiredPrivileges
+        Invoke-MsiExecChecked -Arguments @("/x", $Msi, "/qn", "/norestart")
+        $installed = $false
+        $after = Get-AgentRequiredPrivileges
+        $image = [string](Get-ItemProperty -LiteralPath `
+            "HKLM:\SYSTEM\CurrentControlSet\Services\ssh-agent").ImagePath
+        return @{ During = $during; After = $after; Image = $image }
+    } finally {
+        if ($installed) {
+            Invoke-MsiExecChecked -Arguments @("/x", $Msi, "/qn", "/norestart") `
+                -ExpectedExitCodes @(0, 1605, 3010)
+        }
+        Stop-Service ssh-agent -Force -ErrorAction SilentlyContinue
+        & $sc delete ssh-agent | Out-Null
+    }
+}
+
 Describe "PKCS11 agent preview MSI lifecycle" -Tags "InstallerIntegration" {
     It "rolls the service change back when installation fails" -Skip:$skipIntegration {
         $before = Get-SshAgentSnapshot
@@ -228,6 +271,30 @@ Describe "PKCS11 agent preview MSI lifecycle" -Tags "InstallerIntegration" {
             $after.Start | Should Be $before.Start
             $after.Running | Should Be $before.Running
         }
+    }
+
+    # The agent starts the PKCS#11 helper with the client's token and needs
+    # SeAssignPrimaryTokenPrivilege for it, also when an existing service is
+    # redirected. These tests create their own ssh-agent service and are skipped
+    # when one is already installed.
+    $skipExistingService = $skipIntegration -or
+        [bool](Get-Service ssh-agent -ErrorAction SilentlyContinue)
+    It "adds the helper privileges to an existing service and restores them" -Skip:$skipExistingService {
+        $r = Invoke-ExistingServicePrivilegeScenario `
+            -InitialPrivileges @("SeChangeNotifyPrivilege") -Msi $msiPath
+        $r.During -contains "SeAssignPrimaryTokenPrivilege" | Should Be $true
+        $r.During -contains "SeImpersonatePrivilege" | Should Be $true
+        $r.During -contains "SeChangeNotifyPrivilege" | Should Be $true
+        ($r.After -join ",") | Should Be "SeChangeNotifyPrivilege"
+        $r.Image | Should Match "cmd.exe"
+    }
+
+    It "adds the helper privileges to an existing service without any and removes them" -Skip:$skipExistingService {
+        $r = Invoke-ExistingServicePrivilegeScenario -InitialPrivileges @() `
+            -Msi $msiPath
+        $r.During -contains "SeAssignPrimaryTokenPrivilege" | Should Be $true
+        $r.After | Should BeNullOrEmpty
+        $r.Image | Should Match "cmd.exe"
     }
 
     It "still recognizes the preview service when arguments were added" -Skip:$skipIntegration {
