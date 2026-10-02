@@ -44,17 +44,59 @@ missing prerequisites fail instead of producing an explicit local skip.
 Agent logging
 -------------
 
-To get a log file, append -v, -vv, -vvv or -vvvv (verbose, debug1, debug2,
-debug3) to the service's ImagePath, for example:
+The service writes a log file when it is started with a verbosity option:
 
-  sc.exe config ssh-agent binPath= "\"C:\Program Files\OpenSSH PKCS11 Agent\ssh-agent.exe\" -vv"
+  -v     verbose  (accepted/refused requests, resolved provider paths)
+  -vv    debug1   (plus connections, client type, helper start)
+  -vvv   debug2
+  -vvvv  debug3   (most detailed)
 
-and restart the service. The installer still recognizes the service with such
-arguments, keeps them across upgrades and removes or restores the service on
-uninstall. The log is then written to
-%ProgramData%\ssh\logs\ssh-agent.log (created on demand, readable only by
-SYSTEM and Administrators). The PIN is never logged.
+Without one of these options the agent logs only at INFO level through the
+Windows event log, which has not shown any entries in tests of this preview.
+Use -v to get a readable file.
+
+Turn logging on (elevated PowerShell; this also works while the service runs):
+
+  Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\ssh-agent -Name ImagePath `
+      -Value '"C:\Program Files\OpenSSH PKCS11 Agent\ssh-agent.exe" -vv'
+  Restart-Service ssh-agent
+
+(From cmd.exe: sc.exe config ssh-agent binPath= "\"C:\Program Files\OpenSSH PKCS11 Agent\ssh-agent.exe\" -vv"
+ Do not use sc.exe from PowerShell, it drops the inner quotes.)
+
+Read the log (elevated PowerShell, the file is only readable for SYSTEM and
+Administrators; it is created on demand and appended to):
+
+  Get-Content C:\ProgramData\ssh\logs\ssh-agent.log -Wait -Tail 30
+
+Turn logging off again (the arguments are the only change):
+
+  Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\ssh-agent -Name ImagePath `
+      -Value '"C:\Program Files\OpenSSH PKCS11 Agent\ssh-agent.exe"'
+  Restart-Service ssh-agent
+
+The installer still recognizes the service with such arguments, keeps them
+across upgrades and removes or restores the service on uninstall.
+
+Each line starts with the process id and a timestamp. The service process and
+one worker process per client connection write to the same file. Useful
+INFO-level lines (shown from -v on):
+
+  added PKCS#11 provider "<path>": N key(s) and M certificate(s) stored
+  refusing PKCS#11 add of "<path>": provider not allowed by -P "<list>"
+  refusing PKCS#11 add of "<path>": lifetime, confirmation and destination
+      constraints are not supported
+  failed PKCS#11 add of "<path>": no keys loaded from the provider
+  failed PKCS#11 add of "<path>": no matching identities to store
+  removed PKCS#11 provider "<path>" and its identities
+  failed PKCS#11 remove of "<path>": provider is not registered
+  failed to reload stored PKCS#11 provider "<path>" for signing
+
+The PIN is never logged. The log contains provider paths, user names and key
+fingerprints, so treat it accordingly.
 
 For interactive debugging, an elevated "ssh-agent.exe -ddd -D" runs in the
 foreground, logs to the console and keeps serving connections until Ctrl+C
-(without -D it exits after the first connection).
+(without -D it exits after the first connection). Stop the service first. The
+foreground agent runs as you, not as SYSTEM, so it cannot start the PKCS#11
+helper for clients that are not elevated; use an elevated client for it.
